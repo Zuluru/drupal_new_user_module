@@ -1,0 +1,7 @@
+name = Zuluru New User Registration
+description = New user handling for Zuluru
+core = 7.x
+package = Zuluru
+configure = admin/people/zuluru_new_user
+
+version = "7.x-rc1"

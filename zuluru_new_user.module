@@ -1,0 +1,331 @@
+<?php
+/**
+ * @file
+ * Zuluru new user registration handler
+ *
+ * This module provides handling for new users.  A new user needs to both have a Zuluru
+ * and a Drupal user created for them.  This can either happen by creating a user through
+ * and then manually adding the Drupal user here, or, by creating a new Drupal user and then
+ * forcing the new user to continue to the Zuluru registration after they have created their
+ * Drupal account and logged in.
+ */
+
+/*
+ * Admin settings form
+ * 
+ */
+function zuluru_new_user_admin() {
+  $domain = strtolower($_SERVER['HTTP_HOST']);
+  if (substr ($domain, 0, 4) == 'www.') {
+	  $domain = substr ($domain, 4);
+  }
+  if (substr ($domain, 0, 5) == 'test.') {
+	  $domain = substr ($domain, 5);
+  }
+  $zuluru_host = "{$_SERVER['REQUEST_SCHEME']}://zuluru.{$domain}";
+
+  $form = array();
+  $form['zuluru_new_user_zuluru_create_profile_target'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Zuluru root location'),
+    '#default_value' => variable_get('zuluru_new_user_zuluru_create_profile_target', '/zuluru'),
+    '#size' => 60,
+    '#maxlength' => 512,
+    '#description' => sprintf(t('This is the page you want a new user to be directed to once they have created a new Drupal account.  For example: /zuluru or %s'), $zuluru_host),
+  );
+  $form['zuluru_new_user_zuluru_database'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Zuluru database name'),
+    '#default_value' => variable_get('zuluru_new_user_zuluru_database', ''),
+    '#size' => 60,
+    '#maxlength' => 512,
+    '#description' => t('If your Zuluru database is separate from your Drupal database, enter the name of the Zuluru database here. Otherwise, leave this blank. The Zuluru database must have at least read access for the Drupal database user.'),
+  );
+  $form['zuluru_new_user_registration_mode'] = array(
+       '#type' => 'select',
+       '#title' => t('Registration Mode'),
+       '#options' => array(
+         'drupal' => t('Drupal'),
+         'zuluru' => t('Zuluru'),
+       ),
+       '#default_value' => variable_get('zuluru_new_user_registration_mode', 'zuluru'),
+       '#description' => t('Drupal mode handles the new account through Drupal then sends a user to the target link after they have a new account.'
+          .'  Zuluru mode changes the new account links from default Drupal ones to the standard Zuluru ones'),
+  );
+  $form['zuluru_new_user_drupal_registration_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Drupal Registration Redirect Mode'),
+    '#options' => array(
+      'instant_redirect' => t('Redirect Immediatly'),
+      'timed_redirect' => t('Redirect After Delay'),
+      'message' => t('Request League Registration'),
+    ),
+    '#default_value' => variable_get('zuluru_new_user_drupal_registration_type', 'instant_redirect'),
+    '#description' => t('When Drupal handles new user registration, it will need to forward to Zuluru to complete a leagues profile.  Do not select "Request League Registration" unless you are willing to have Drupal only users.'),
+    '#states' => array(
+      'visible' => array(
+        ':input[name="zuluru_new_user_registration_mode"]' => array( 'value' => 'drupal')
+      )
+    )
+  );
+  $form['zuluru_new_user_drupal_registration_redirect_delay_seconds'] = array(
+    '#type' => 'select',
+    '#title' => t('Redirect Delay (seconds)'),
+    '#options' => array(
+      1 => '1',
+      2 => '2',
+      3 => '3',
+      4 => '4',
+      5 => '5',
+      8 => '8',
+      10 => '10',
+      15 => '15',
+      20 => '20',
+      30 => '30',
+    ),
+    '#default_value' => variable_get('zuluru_new_user_drupal_registration_redirect_delay_seconds', 10 ),
+    '#description' => t('How long should the message display before it forwards to the leagues registration page'),
+    '#states' => array(
+      'visible' => array(
+        ':input[name="zuluru_new_user_registration_mode"]' => array( 'value' => 'drupal'),
+        ':input[name="zuluru_new_user_drupal_registration_type"]' => array( 'value' => 'timed_redirect')
+      )
+    )
+  );
+  return system_settings_form($form);
+}
+
+/**
+* Implements hook_help.
+*
+* Displays help and module information.
+*
+* @param path
+*   Which path of the site we're using to display help
+* @param arg
+*   Array that holds the current path as returned from arg() function
+*/
+function zuluru_new_user_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#zuluru_new_user':
+      return '<p>' . t('Handles new users joining the system and makes sure they have both a Drupal and Zuluru account') . '</p>';
+      break;
+  }
+}
+
+/**
+ * Implements hook_permission().
+ *
+ * This sets up a custom permission for our page, allowing control of who can update files.
+ */
+function zuluru_new_user_permission() {
+  return array(
+    'administer zuluru new user' => array(
+      'title' => t('Administer new user creation'),
+      'description' => t('Allow users to administer how new user account creation is guided to both Drupal and the league system'),
+      'restrict access' => true,
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ *
+ * This sets up the page url and allows users with the appropriate permissions to see and use the page
+ *
+ */
+function zuluru_new_user_menu() {
+
+  $items['admin/people/zuluru_new_user'] = array(
+    'title' => 'New Users',
+    'description' => 'Settings for Zuluru new user managment',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('zuluru_new_user_admin'),
+    'access arguments' => array('administer zuluru new user'),
+    'type' => MENU_NORMAL_ITEM,
+   );
+  return $items;
+}
+
+/*
+ * Implements hook_user_login
+ * 
+ * We are looking for users logging in for the first time, we will need to make sure that they
+ * are not using their password reset items here, but we'll need to redirect after the password
+ * reset is completed.
+ */
+function zuluru_new_user_user_login(&$edit, $account) {
+  //Check if it is the password redirect form, if it is, we'll catch them after the password reset is complete
+  if(variable_get('zuluru_new_user_registration_mode', 'zuluru')==='drupal') {
+    if (!isset($_POST['form_id']) || $_POST['form_id'] != 'user_pass_reset') {
+      _zuluru_new_user_check_and_redirect();
+    }
+  }
+}
+
+/*
+ * Implements hook_form_alter
+ * 
+ * The primary use case for this module is to redirect new users to Zuluru to complete their registration.
+ * Usually registration happening through Drupal is completed by setting the password after a one time
+ * login link has been sent to the user and they have reset their password in Drupal.  Once the password is set
+ * we should take them to the Zuluru install so that they can make their league profile.
+ */
+function zuluru_new_user_form_user_profile_form_alter(&$form, &$form_state, $form_id) {
+  if(variable_get('zuluru_new_user_registration_mode', 'zuluru')==='drupal') {
+    $form['#submit'][] = 'zuluru_new_user_password_update_form_submit';
+  }
+}
+
+/*
+ * Custom submit handler for the update passoword form.  Most common use case for wods.ca is that a new user
+ * will log in the first time via the one-time log in form.  This handler responds to the new password form success
+ * and redirects the user to the league system if they do not yet have an account.
+ */
+
+function zuluru_new_user_password_update_form_submit($form, &$form_state) {
+  global $user;
+  // If an admin is changing user information, don't mess with their landing page
+  if($user->uid !== $form['#user']->uid) {
+    return;
+  }
+  _zuluru_new_user_check_and_redirect();
+}
+
+/**
+ * Implements hook_menu_alter.
+ * Change the new user redirect page
+ */
+function zuluru_new_user_menu_alter(&$items) {
+  if( variable_get('zuluru_new_user_registration_mode', 'zuluru') === 'zuluru') {
+    $items['user/register'] = array(
+      'title' => 'Create new account',
+      'page callback' => '_zuluru_new_user_redirect_to_zuluru_new_user',
+      'access callback' => 'user_register_access',
+      'type' => MENU_LOCAL_TASK,
+    );
+    $items['user/password'] = array(
+      'title' => 'Request new password',
+      'page callback' => '_zuluru_new_user_redirect_to_zuluru_password_reset',
+      'access callback' => TRUE,
+      'type' => MENU_LOCAL_TASK,
+    );
+  }
+}
+/*
+ * custom page callbacks
+ */
+function _zuluru_new_user_redirect_to_zuluru_new_user() {
+  drupal_goto(variable_get('zuluru_new_user_zuluru_create_profile_target', '/zuluru').'/users/create_account',array(),302);
+}
+function _zuluru_new_user_redirect_to_zuluru_password_reset() {
+  drupal_goto(variable_get('zuluru_new_user_zuluru_create_profile_target', '/zuluru').'/users/reset_password',array(),302);
+}
+
+/*
+ * Helper function
+ * 
+ * This function checks to see if the user has a Zuluru account and then sends them to Zuluru if they
+ * don't have an account yet.
+ */
+function _zuluru_new_user_check_and_redirect() {
+  if( _zuluru_new_user_is_new_user()) {
+    $redirect_mode = variable_get('zuluru_new_user_drupal_registration_type', 'instant_redirect');
+    $redirect_url = variable_get('zuluru_new_user_zuluru_create_profile_target', '/zuluru');
+    switch($redirect_mode) {
+      case 'timed_redirect':
+        $time_delay = variable_get('zuluru_new_user_drupal_registration_redirect_delay_seconds', 10 );
+        drupal_set_message(
+          t(
+            'Thank you for registering.  To complete your leagues profile you will now be rediredcted to <a href="@url" title="leagues system" class="leagues-redirect-link">@url</a> in <span id="redirect-time-value">@time_value</span> seconds.',
+            array(
+              '@url' => $redirect_url,
+              '@time_value' => $time_delay,
+            )
+          )
+        );
+        // This is required because a new user gets redirected after login so js loaded here never gets run.
+        $_SESSION['do_new_user_redirect'] = 1;
+        // There are some cases that a redirect does not happen on password set, in those cases, issue the javascript timed redirect here as well
+        drupal_add_js(array('zuluruNewUserSetting' => array('time_delay' => $time_delay, 'redirect_url' => $redirect_url )), 'setting');
+        drupal_add_js(drupal_get_path( 'module', 'zuluru_new_user' ) . '/js/zuluru_new_user_delay.js', 'file');
+        break;
+
+      case 'message':
+        drupal_set_message(
+          t(
+            'Thank you for registering.  Please complete your registration by filling out a leagues profile at <a href="@url" title="leagues system" class="leagues-redirect-link">@url</a>',
+            array(
+              '@url' => $redirect_url
+            )
+          )
+        );
+        break;
+
+      case 'instant_redirect':
+      default:
+        //Send the user to the configured location
+        drupal_goto( $redirect_url, array(), 302 );
+    }
+  }
+}
+
+function zuluru_new_user_page_alter(&$page) {
+  if( isset($_SESSION['do_new_user_redirect']) ) {
+    if( _zuluru_new_user_is_new_user() ) {
+      $time_delay = variable_get('zuluru_new_user_drupal_registration_redirect_delay_seconds', 10 );
+      $redirect_url = variable_get('zuluru_new_user_zuluru_create_profile_target', '/zuluru');
+      drupal_add_js(array('zuluruNewUserSetting' => array('time_delay' => $time_delay, 'redirect_url' => $redirect_url )), 'setting');
+      drupal_add_js(drupal_get_path( 'module', 'zuluru_new_user' ) . '/js/zuluru_new_user_delay.js', 'file');
+    } else {
+      unset($_SESSION['do_new_user_redirect']);
+    }
+  }
+}
+
+/*
+ * Check the zuluru database for this user
+ * 
+ * return true if does not exist, false if exists
+ */
+function _zuluru_new_user_is_new_user() {
+  global $user;
+  $uid = $user->uid;
+
+  $database = variable_get('zuluru_new_user_zuluru_database', '');
+  if (!empty($database)) {
+  	$database .= '.';
+  }
+
+  // Note, the table here is not in braces because it is part of Zuluru, not Drupal.  I am not sure
+  // how to include the same database without table prefixes without causing errors.
+  $result = db_query("SELECT * from {$database}people WHERE user_id = :uid", array(':uid'=>$uid));
+  $record = $result->fetchObject();
+  if(!$record) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Display the full name and not the username
+ */
+function zuluru_new_user_username_alter (&$name, $account) {
+  if (empty($account->uid)) {
+	  return;
+  }
+
+  $database = variable_get('zuluru_new_user_zuluru_database', '');
+  if (!empty($database)) {
+  	$database .= '.';
+  }
+
+  // Note, the table here is not in braces because it is part of Zuluru, not Drupal.  I am not sure
+  // how to include the same database without table prefixes without causing errors.
+  $result = db_query("SELECT first_name,last_name from {$database}people WHERE user_id = :uid", array(':uid'=>$account->uid));
+  $record = $result->fetchObject();
+  if(!$record) {
+    return;
+  }
+  $name = "{$record->first_name} {$record->last_name}";
+}
